@@ -117,7 +117,8 @@ class LarkAPI:
                 
                 # Nếu là timestamp (số)
                 if isinstance(ngay_hen, (int, float)):
-                    item_date = datetime.fromtimestamp(ngay_hen / 1000)
+    # Cộng thêm 7 tiếng (7 * 3600 giây) để khớp với múi giờ Việt Nam trước khi lấy .date()
+                    item_date = datetime.fromtimestamp((ngay_hen / 1000) + (7 * 3600))
                 
                 # Nếu là string
                 elif isinstance(ngay_hen, str):
@@ -167,7 +168,7 @@ class LarkAPI:
                 # Filter chi nhánh
                 if branch:
                     branch_name = BRANCHES.get(branch.lower(), branch)
-                    chi_nhanh = fields.get("Chi nhánh", "")
+                    chi_nhanh = str(fields.get("Chi nhánh", ""))
                     if branch_name not in chi_nhanh and chi_nhanh not in branch_name:
                         continue
                 
@@ -182,7 +183,8 @@ class LarkAPI:
         
         # Chuyển đổi ngày
         try:
-            date_obj = datetime.strptime(appointment_data["date"], "%d/%m/%Y")
+            date_obj = date_obj.replace(hour=0, minute=0, second=0, microsecond=0)
+date_timestamp = int(date_obj.timestamp() * 1000)
         except:
             date_obj = datetime.strptime(appointment_data["date"], "%d/%m")
             date_obj = date_obj.replace(year=datetime.now().year)
