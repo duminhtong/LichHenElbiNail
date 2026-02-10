@@ -56,42 +56,125 @@ class LarkAPI:
         """Lấy danh sách lịch hẹn theo ngày và chi nhánh"""
         headers = await self.get_headers()
         
-        # Chuyển đổi ngày sang timestamp (milliseconds)
+        # Chuẩn hóa ngày nhập vào
         try:
-            date_obj = datetime.strptime(date_str, "%d/%m/%Y")
-        except:
-            date_obj = datetime.strptime(date_str, "%d/%m")
-            date_obj = date_obj.replace(year=datetime.now().year)
+            if "/" in date_str:
+                parts = date_str.split("/")
+                if len(parts) == 2:
+                    day, month = parts
+                    year = datetime.now().year
+                else:
+                    day, month, year = parts
+                date_obj = datetime(int(year), int(month), int(day))
+            else:
+                date_obj = datetime.strptime(date_str, "%d-%m-%Y")
+        except Exception as e:
+            print(f"Date parse error: {e}")
+            return []
         
+        # Tạo timestamp cho filter (milliseconds)
         date_start = int(date_obj.timestamp() * 1000)
         date_end = int((date_obj + timedelta(days=1)).timestamp() * 1000)
         
-        # Build filter
-        filter_conditions = [f'CurrentValue.[Ngày hẹn] >= {date_start}', f'CurrentValue.[Ngày hẹn] < {date_end}']
-        if branch:
-            branch_name = BRANCHES.get(branch.lower(), branch)
-            filter_conditions.append(f'CurrentValue.[Chi nhánh] = "{branch_name}"')
-        
-        filter_str = "AND(" + ", ".join(filter_conditions) + ")"
-        
-        url = f"https://open.larksuite.com/open-apis/bitable/v1/apps/{self.base_id}/tables/{self.table_id}/records/search"
+        # Thử lấy tất cả records trước (không filter ngày qua API)
+        url = f"https://open.larksuite.com/open-apis/bitable/v1/apps/{self.base_id}/tables/{self.table_id}/records"
         
         async with httpx.AsyncClient() as client:
-            response = await client.post(
+            response = await client.get(
                 url,
                 headers=headers,
-                json={
-                    "filter": filter_str,
-                    "page_size": 100
-                }
+                params={"page_size": 500}
             )
             data = response.json()
             
-            if data.get("code") == 0:
-                return data.get("data", {}).get("items", [])
-            else:
+            print(f"Lark API Response: {data}")  # Debug log
+            
+            if data.get("code") != 0:
                 print(f"Error: {data}")
                 return []
+            
+            items = data.get("data", {}).get("items", [])
+            filtered_items = []
+            
+            print(f"Total records from Lark: {len(items)}")
+            print(f"Looking for date: {date_obj.date()}")
+            
+            # Filter theo ngày và chi nhánh trong Python
+            for item in items:
+                fields = item.get("fields", {})
+                
+                # Lấy ngày hẹn - có thể là timestamp hoặc text
+                ngay_hen = fields.get("Ngày hẹn")
+                
+                print(f"Record fields: {fields}")
+                print(f"Ngày hẹn value: {ngay_hen}, type: {type(ngay_hen)}")
+                
+                if ngay_hen is None:
+                    continue
+                
+                # Xử lý nhiều định dạng ngày
+                item_date = None
+                
+                # Nếu là timestamp (số)
+                if isinstance(ngay_hen, (int, float)):
+                    item_date = datetime.fromtimestamp(ngay_hen / 1000)
+                
+                # Nếu là string
+                elif isinstance(ngay_hen, str):
+                    ngay_hen = ngay_hen.strip()
+                    # Thử các định dạng phổ biến
+                    for fmt in ["%d/%m/%Y", "%Y/%m/%d", "%d-%m-%Y", "%Y-%m-%d", "%d/%m"]:
+                        try:
+                            item_date = datetime.strptime(ngay_hen, fmt)
+                            if fmt == "%d/%m":
+                                item_date = item_date.replace(year=datetime.now().year)
+                            break
+                        except:
+                            continue
+                    
+                    # Nếu vẫn không parse được, thử tách thủ công
+                    if item_date is None and "/" in ngay_hen:
+                        try:
+                            parts = ngay_hen.split("/")
+                            if len(parts) == 3:
+                                d, m, y = int(parts[0]), int(parts[1]), int(parts[2])
+                                item_date = datetime(y, m, d)
+                            elif len(parts) == 2:
+                                d, m = int(parts[0]), int(parts[1])
+                                item_date = datetime(datetime.now().year, m, d)
+                        except Exception as e:
+                            print(f"Manual parse failed: {e}")
+                
+                # Nếu là dict (Lark Date object)
+                elif isinstance(ngay_hen, dict):
+                    # Lark có thể trả về dạng {"date": "2025-02-11"} hoặc timestamp
+                    if "date" in ngay_hen:
+                        try:
+                            item_date = datetime.strptime(ngay_hen["date"], "%Y-%m-%d")
+                        except:
+                            pass
+                    elif "timestamp" in ngay_hen:
+                        item_date = datetime.fromtimestamp(ngay_hen["timestamp"] / 1000)
+                
+                if item_date is None:
+                    print(f"Cannot parse date: {ngay_hen}")
+                    continue
+                
+                # So sánh ngày (chỉ so sánh ngày, bỏ qua giờ)
+                if item_date.date() != date_obj.date():
+                    continue
+                
+                # Filter chi nhánh
+                if branch:
+                    branch_name = BRANCHES.get(branch.lower(), branch)
+                    chi_nhanh = fields.get("Chi nhánh", "")
+                    if branch_name not in chi_nhanh and chi_nhanh not in branch_name:
+                        continue
+                
+                filtered_items.append(item)
+            
+            print(f"Found {len(filtered_items)} appointments for {date_str}")
+            return filtered_items
     
     async def add_appointment(self, appointment_data: dict):
         """Thêm lịch hẹn mới"""
