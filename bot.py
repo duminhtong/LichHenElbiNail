@@ -199,8 +199,6 @@ class LarkAPI:
         
         if appointment_data.get("phone"):
             fields["SĐT"] = appointment_data["phone"]
-        if appointment_data.get("people"):
-            fields["Số người"] = int(appointment_data["people"])
         if appointment_data.get("note"):
             fields["Ghi chú"] = appointment_data["note"]
         
@@ -296,15 +294,12 @@ async def check_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
             time_str = fields.get("Giờ hẹn", "N/A")
             name = fields.get("Tên khách", "N/A")
             phone = fields.get("SĐT", "")
-            people = fields.get("Số người", 1)
             note = fields.get("Ghi chú", "")
             status = fields.get("Trạng thái", "Chờ")
             
             status_icon = "⏳" if status == "Chờ" else "✅" if status == "Đã đến" else "❌"
             
             line = f"{status_icon} **{time_str}** - {name}"
-            if people and people > 1:
-                line += f" ({people} người)"
             if phone:
                 line += f" | {phone}"
             if note:
@@ -515,7 +510,7 @@ async def book_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         f"✅ Tên: {context.user_data['name']}\n\n"
-        "Bước 5/6: Nhập số điện thoại (hoặc bỏ qua):",
+        "Bước 5/5: Nhập số điện thoại (hoặc bỏ qua):",
         reply_markup=reply_markup
     )
     return BOOK_PHONE
@@ -523,7 +518,7 @@ async def book_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def book_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Xử lý nhập SĐT"""
     context.user_data["phone"] = update.message.text.strip()
-    return await ask_people(update, context)
+    return await show_confirm_message(update, context)
 
 async def book_phone_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Bỏ qua SĐT"""
@@ -531,18 +526,7 @@ async def book_phone_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     context.user_data["phone"] = ""
     
-    keyboard = [
-        [InlineKeyboardButton("1 người", callback_data="people_1")],
-        [InlineKeyboardButton("2 người", callback_data="people_2")],
-        [InlineKeyboardButton("3+ người", callback_data="people_more")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(
-        "Bước 6/6: Số người:",
-        reply_markup=reply_markup
-    )
-    return BOOK_PEOPLE
+    return await show_confirm(query, context)
 
 async def ask_people(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Hỏi số người"""
@@ -601,7 +585,6 @@ async def show_confirm(query, context):
         f"🏪 Chi nhánh: {data['branch']}\n"
         f"👤 Tên: {data['name']}\n"
         f"📞 SĐT: {data.get('phone') or 'Không có'}\n"
-        f"👥 Số người: {data.get('people', 1)}\n"
         f"📝 Ghi chú: {data.get('note') or 'Không có'}\n",
         reply_markup=reply_markup,
         parse_mode="Markdown"
@@ -626,7 +609,6 @@ async def show_confirm_message(update: Update, context: ContextTypes.DEFAULT_TYP
         f"🏪 Chi nhánh: {data['branch']}\n"
         f"👤 Tên: {data['name']}\n"
         f"📞 SĐT: {data.get('phone') or 'Không có'}\n"
-        f"👥 Số người: {data.get('people', 1)}\n"
         f"📝 Ghi chú: {data.get('note') or 'Không có'}\n",
         reply_markup=reply_markup,
         parse_mode="Markdown"
@@ -656,7 +638,6 @@ async def book_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "branch": data["branch"],
         "name": data["name"],
         "phone": data.get("phone", ""),
-        "people": data.get("people", 1),
         "note": data.get("note", "")
     }
     
@@ -670,7 +651,6 @@ async def book_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🏪 Chi nhánh: {data['branch']}\n"
             f"👤 Khách: {data['name']}\n"
             f"📞 SĐT: {data.get('phone') or 'Không có'}\n"
-            f"👥 Số người: {data.get('people', 1)}\n"
             f"📝 Ghi chú: {data.get('note') or 'Không có'}",
             parse_mode="Markdown"
         )
