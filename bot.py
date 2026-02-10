@@ -43,8 +43,7 @@ class LarkAPI:
                 self.access_token = data["tenant_access_token"]
                 self.token_expires = datetime.now() + timedelta(seconds=data.get("expire", 7200) - 300)
                 return self.access_token
-            else:
-                raise Exception(f"Lark Auth Error: {data}")
+            return None
     
     async def get_headers(self):
         token = await self.get_access_token()
@@ -52,145 +51,119 @@ class LarkAPI:
     
     async def get_appointments(self, date_str: str, branch: str = None):
         headers = await self.get_headers()
-        
         try:
             if "/" in date_str:
                 parts = date_str.split("/")
-                if len(parts) == 2:
-                    day, month = parts
-                    year = datetime.now().year
-                else:
-                    day, month, year = parts
-                date_obj = datetime(int(year), int(month), int(day))
+                day = int(parts[0])
+                month = int(parts[1])
+                year = int(parts[2]) if len(parts) > 2 else datetime.now().year
+                date_obj = datetime(year, month, day)
             else:
                 date_obj = datetime.strptime(date_str, "%d-%m-%Y")
-        except Exception as e:
-            print(f"Date parse error: {e}")
+        except:
             return []
         
         url = f"https://open.larksuite.com/open-apis/bitable/v1/apps/{self.base_id}/tables/{self.table_id}/records"
-        
         async with httpx.AsyncClient() as client:
             response = await client.get(url, headers=headers, params={"page_size": 500})
             data = response.json()
-            
-            if data.get("code") != 0:
-                return []
+            if data.get("code") != 0: return []
             
             items = data.get("data", {}).get("items", [])
             filtered_items = []
-            
             for item in items:
                 fields = item.get("fields", {})
                 ngay_hen = fields.get("Ngày hẹn")
+                if not ngay_hen: continue
                 
-                if ngay_hen is None:
-                    continue
+                # SỬA LỖI MÚI GIỜ: Cộng 7 tiếng cho đúng giờ VN
+                item_date = datetime.fromtimestamp((ngay_hen / 1000) + (7 * 3600))
                 
-                item_date = None
-                # KHẮC PHỤC MÚI GIỜ: Cộng 7 tiếng cho đúng giờ VN
-                if isinstance(ngay_hen, (int, float)):
-                    item_date = datetime.fromtimestamp((ngay_hen / 1000) + (7 * 3600))
-                
-                elif isinstance(ngay_hen, str):
-                    for fmt in ["%d/%m/%Y", "%Y/%m/%d", "%d-%m-%Y", "%Y-%m-%d"]:
-                        try:
-                            item_date = datetime.strptime(ngay_hen, fmt)
-                            break
-                        except:
+                if item_date.date() == date_obj.date():
+                    if branch:
+                        branch_name = BRANCHES.get(branch.lower(), branch)
+                        chi_nhanh = str(fields.get("Chi nhánh", ""))
+                        if branch_name.lower() not in chi_nhanh.lower():
                             continue
-                
-                if item_date is None or item_date.date() != date_obj.date():
-                    continue
-                
-                if branch:
-                    branch_name = BRANCHES.get(branch.lower(), branch)
-                    chi_nhanh = str(fields.get("Chi nhánh", "")) # Sửa lỗi kiểu dữ liệu chi nhánh
-                    if branch_name not in chi_nhanh and chi_nhanh not in branch_name:
-                        continue
-                
-                filtered_items.append(item)
-            
+                    filtered_items.append(item)
             return filtered_items
-    
-    async def add_appointment(self, appointment_data: dict):
+
+    async def add_appointment(self, data: dict):
         headers = await self.get_headers()
         try:
-            try:
-                date_obj = datetime.strptime(appointment_data["date"], "%d/%m/%Y")
-            except:
-                date_obj = datetime.strptime(appointment_data["date"], "%d/%m")
-                date_obj = date_obj.replace(year=datetime.now().year)
-            
-            # Chuẩn hóa về 00:00:00 của ngày đó
-            date_obj = date_obj.replace(hour=0, minute=0, second=0, microsecond=0)
-            date_timestamp = int(date_obj.timestamp() * 1000)
+            # Chuẩn hóa ngày về 00:00 GMT+7
+            d = datetime.strptime(data["date"], "%d/%m/%Y" if "/" in data["date"] else "%d-%m-%Y")
+            d = d.replace(hour=0, minute=0, second=0, microsecond=0)
+            # Lark lưu UTC, nên 00:00 VN = 17:00 ngày hôm trước UTC
+            ts = int((d - timedelta(hours=7)).timestamp() * 1000)
             
             fields = {
-                "Ngày hẹn": date_timestamp,
-                "Giờ hẹn": appointment_data["time"],
-                "Chi nhánh": appointment_data["branch"],
-                "Tên khách": appointment_data["name"],
+                "Ngày hẹn": ts,
+                "Giờ hẹn": data["time"],
+                "Chi nhánh": data["branch"],
+                "Tên khách": data["name"],
+                "SĐT": data.get("phone", ""),
+                "Số người": str(data.get("people", "1")),
+                "Ghi chú": data.get("note", ""),
                 "Trạng thái": "Chờ"
             }
-            
-            if appointment_data.get("phone"): fields["SĐT"] = appointment_data["phone"]
-            if appointment_data.get("note"): fields["Ghi chú"] = appointment_data["note"]
-            
             url = f"https://open.larksuite.com/open-apis/bitable/v1/apps/{self.base_id}/tables/{self.table_id}/records"
             async with httpx.AsyncClient() as client:
-                response = await client.post(url, headers=headers, json={"fields": fields})
-                data = response.json()
-                return (True, data.get("data", {}).get("record", {})) if data.get("code") == 0 else (False, data)
-        except Exception as e:
-            return False, str(e)
+                res = await client.post(url, headers=headers, json={"fields": fields})
+                return res.json().get("code") == 0
+        except:
+            return False
 
 lark = LarkAPI()
 
-# ============== BOT COMMANDS (Giữ nguyên logic của bạn) ==============
+# ============== HANDLERS ==============
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    welcome_text = "🏪 **NAIL SALON BOT**\n\n/check [ngày] [rs/rg] - Xem lịch\n/today - Hôm nay\n/book - Đặt lịch"
-    await update.message.reply_text(welcome_text, parse_mode="Markdown")
+    await update.message.reply_text("🏪 **MANNER NAILBOX**\n\n/check [ngày] [rs/rg] - Xem lịch\n/today - Hôm nay\n/book - Đặt lịch mới", parse_mode="Markdown")
 
 async def check_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    args = context.args
-    if not args:
-        await update.message.reply_text("❌ Nhập ngày! VD: `/check 11/2`", parse_mode="Markdown")
+    if not context.args:
+        await update.message.reply_text("Gõ theo cú pháp: `/check 11/2` hoặc `/check 11/2 rs`", parse_mode="Markdown")
         return
     
-    date_str = args[0]
-    branch = args[1] if len(args) > 1 else None
-    await update.message.reply_text("⏳ Đang tra cứu...")
+    date_str = context.args[0]
+    branch = context.args[1] if len(context.args) > 1 else None
+    msg = await update.message.reply_text(f"⏳ Đang kiểm tra lịch ngày {date_str}...")
     
     appointments = await lark.get_appointments(date_str, branch)
     
-    header = f"📅 **Lịch ngày {date_str}**\n\n"
     if not appointments:
-        await update.message.reply_text(header + "✅ Trống!", parse_mode="Markdown")
+        await msg.edit_text(f"📅 **Lịch ngày {date_str}:**\n✅ Trống, chưa có khách đặt.", parse_mode="Markdown")
         return
 
-    res = header
-    for apt in appointments:
-        f = apt.get("fields", {})
-        res += f"• {f.get('Giờ hẹn')} - {f.get('Tên khách')} ({f.get('Chi nhánh')})\n"
+    # Sắp xếp theo giờ hẹn
+    appointments.sort(key=lambda x: x["fields"].get("Giờ hẹn", "00:00"))
     
-    await update.message.reply_text(res, parse_mode="Markdown")
+    res = f"📅 **Lịch ngày {date_str}:**\n"
+    for apt in appointments:
+        f = apt["fields"]
+        res += f"• `{f.get('Giờ hẹn')}`: {f.get('Tên khách')} ({f.get('Chi nhánh')})\n"
+    
+    await msg.edit_text(res, parse_mode="Markdown")
 
 async def today_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.args = [datetime.now().strftime("%d/%m")]
     await check_schedule(update, context)
 
-# ... (Các hàm book_start, book_date_callback, v.v. giữ nguyên từ file gốc của bạn) ...
-# Lưu ý: Do giới hạn độ dài, tôi tập trung sửa các phần gây lỗi. 
-# Hãy copy các hàm conversation còn lại từ file cũ của bạn vào dưới đây.
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Đã hủy thao tác.")
+    return ConversationHandler.END
 
+# ============== CẤU HÌNH BOT ==============
 def main():
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("check", check_schedule))
-    application.add_handler(CommandHandler("today", today_schedule))
-    print("🤖 Bot đang chạy...")
-    application.run_polling()
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("check", check_schedule))
+    app.add_handler(CommandHandler("today", today_schedule))
+    app.add_handler(CommandHandler("cancel", cancel))
+    
+    print("🤖 Bot Manner Nailbox đang khởi động...")
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
